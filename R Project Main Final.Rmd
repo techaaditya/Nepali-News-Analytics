@@ -1,0 +1,1064 @@
+# R Programming (DSMA 199) Semester Project
+
+## Nepali News Analytics: EDA, Classification, Sentiment, Summarization, and Beyond
+
+### Submitted by : Aaditya Sapkota, Aashish Bam, Supreme Khatiwada, Ashwin Burlakoti
+
+### Loading the required Libraries.
+
+```{r}
+library(readr);library(dplyr);library(stringr);library(tm);library(quanteda);library(quanteda.textmodels);library(SparseM);library(doParallel);library(ranger);
+library(Matrix);library(pheatmap);library(reshape2);library(textclean);library(glmnet);library(text2vec);library(tidytext);library(ggplot2);library(wordcloud);
+library(RColorBrewer);library(caret);library(e1071);library(randomForest);library(udpipe);library(textrank)
+```
+
+# Phase 1:Data Collection and Preprocessing
+
+### Loading the custom Nepali News Dataset.
+
+```{r}
+news_data<-read_csv("50k_news_dataset.csv",show_col_types = FALSE)
+```
+
+## Initial Data Exploration
+
+```{r}
+str(news_data)
+```
+
+```{r}
+head(news_data)
+```
+
+```{r}
+tail(news_data)
+```
+
+```{r}
+summary(news_data)
+```
+
+```{r}
+dim(news_data)
+```
+
+### Checking and Removing missing values.
+
+```{r}
+colSums(is.na(news_data))
+news_data<-na.omit(news_data)
+dim(news_data)
+```
+
+### Checking and Removing Duplicate Rows.
+
+```{r}
+sum(duplicated(news_data))
+```
+
+```{r}
+news_data[duplicated(news_data), ]
+news_data<-news_data[!duplicated(news_data), ]
+```
+
+```{r}
+dim(news_data)
+```
+
+## Text Pre-processing Pipeline
+
+### Function for Nepali Text Cleaning
+
+```{r}
+clean_nepali_text<-function(text) {
+  text<-as.character(text)
+  text<-gsub("<.*?>","",text)
+  text<-gsub("http\\S+|www\\S+|https\\S+","",text)
+  text<-gsub("\\S+@\\S+","",text)
+  text<-gsub("\\s+"," ",text)
+  text<-trimws(text)
+  return(text)
+}
+```
+
+### Cleaning the content and Headline
+
+```{r}
+news_data$content<-clean_nepali_text(news_data$content)
+news_data$heading<-clean_nepali_text(news_data$heading)
+```
+
+### Creating a Corpus from Cleaned text
+
+```{r}
+news_corpus<-corpus(news_data,text_field = "content")
+```
+
+#### Adding document variables for modeling by category and source.
+
+```{r}
+head(news_corpus)
+```
+
+```{r}
+glimpse(news_corpus)
+```
+
+```{r}
+docvars(news_corpus,"category")<-news_data$category
+docvars(news_corpus,"source")<-news_data$source
+
+news_tokens<-tokens(news_corpus,
+                    remove_punct = TRUE,
+                    remove_symbols = TRUE,
+                    remove_numbers = TRUE,
+                    remove_url = TRUE)
+
+news_dfm<-dfm(news_tokens)
+
+news_dfm<-dfm_trim(news_dfm,min_docfreq = 0.01,docfreq_type = "prop")
+```
+
+# Phase 2 : Exploratory Data Analysis (EDA)
+
+## Category and Source Distribution
+
+```{r}
+source_counts <- count(news_data, source, sort = TRUE)
+source_counts
+```
+
+```{r}
+category_counts <- count(news_data, category, sort = TRUE)
+category_counts
+```
+
+### Category Distribution Analysis
+
+```{r}
+category_counts <- table(news_data$category)
+ggplot(data = as.data.frame(category_counts), aes(x = Var1, y = Freq)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  theme_minimal() +
+  labs(title = "News Articles by Category",
+       x = "Category",
+       y = "Count") +
+  theme(axis.text.x = element_text(angle = 45,hjust=1))
+```
+
+### Source Distribution Analysis
+
+```{r}
+source_counts <- table(news_data$source)
+ggplot(as.data.frame(source_counts), aes(x = Var1, y = Freq)) +
+  geom_bar(stat = "identity", fill = "lightgreen") +
+  theme_minimal() +
+  labs(title = "News Articles by Source",
+       x = "Source",
+       y = "Count") +
+  theme(axis.text.x = element_text(angle = 45,hjust=1))
+```
+
+### Heading Character Length Analysis
+
+```{r}
+heading_character_length <- nchar(news_data$heading)
+summary(heading_character_length)
+```
+
+```{r}
+hist(
+  heading_character_length,
+  main = "Distribution of Heading Character Lengths",
+  xlab = "Number of Characters",
+  ylab = "Frequency",
+  col = "red",
+  border = "black")
+grid()
+```
+
+### Content Character Length Analysis
+
+```{r}
+content_character_length <- nchar(news_data$content)
+summary(content_character_length)
+```
+
+```{r}
+hist(
+  content_character_length,
+  main = "Distribution of content Character Lengths",
+  xlab = "Number of Characters",
+  ylab = "Frequency",
+  col = "blue",
+  border = "black")
+grid()
+```
+
+### Heading Word Count Analysis
+
+```{r}
+heading_word_count <- str_count(news_data$heading, "\\w+")
+summary(heading_word_count)
+```
+
+```{r}
+hist(
+  heading_word_count,
+  main = "Distribution of Heading Word Counts",
+  xlab = "Number of Words",
+  ylab = "Frequency",
+  col = "grey",
+  border = "black"
+)
+grid()
+```
+
+### Content Word Count Analysis
+
+```{r}
+content_word_count <- str_count(news_data$content, "\\w+")
+summary(content_word_count)
+```
+
+```{r}
+hist(
+  content_word_count,
+  main = "Distribution of Content Word Counts",
+  xlab = "Words per Content",
+  ylab = "Frequency",
+  col = "orange",
+  border = "black"
+)
+grid()
+
+```
+
+### Content Length Analysis
+
+```{r}
+news_data$content_char_length <- nchar(news_data$content)
+news_data$content_word_count <- stringr::str_count(news_data$content, "\\w+")
+
+summary(news_data[, c("content_char_length", "content_word_count")])
+```
+
+### Content Length by Word Count.
+
+```{r}
+ggplot(news_data, aes(x = content_word_count)) +
+  geom_histogram(bins = 50, fill = "orange", alpha = 0.7) +
+  labs(
+    title = "Distribution of Article Content Length (Words)",
+    x = "Number of Words",
+    y = "Frequency"
+  ) +
+  theme_minimal()
+```
+
+### Content Length by Character Count.
+
+```{r}
+ggplot(news_data, aes(x = content_char_length)) +
+  geom_histogram(bins = 50, fill = "blue", alpha = 0.7) +
+  labs(
+    title = "Distribution of Article Content Length (Characters)",
+    x = "Number of Characters",
+    y = "Frequency"
+  ) +
+  theme_minimal()
+```
+
+### Content Length by Category
+
+```{r}
+ggplot(news_data, aes(x = category, y = content_word_count)) +
+  geom_boxplot(fill = "lightcoral", alpha = 0.7) +
+  labs(
+    title = "Article Content Length by Category",
+    x = "Category",
+    y = "Number of Words"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+## Frequency Analysis and Visualization
+
+### Top terms analysis
+
+```{r}
+top_features<-topfeatures(news_dfm,50)
+top_features_df<-data.frame(
+  Term=names(top_features),
+  Frequency=as.numeric(top_features)
+)
+print(head(top_features_df,10))
+```
+
+### Creating frequency bar chart
+
+```{r}
+ggplot(head(top_features_df,20),aes(x=reorder(Term,Frequency),
+ y= Frequency))+geom_col(fill="steelblue")+coord_flip()+
+  labs(title = "Top 20 Most Frequent Terms",
+       x="Terms",y="Frequency")+theme_minimal()
+```
+
+### Generate word cloud
+
+```{r}
+set.seed(123)
+wordcloud(words = top_features_df$Term[1:50],
+          freq = top_features_df$Frequency[1:50],
+          min.freq = 2,
+          max.words = 100,
+          random.order = FALSE,
+          rot.per = 0.35,
+          colors = brewer.pal(8, "Dark2"))
+```
+
+## N gram Analysis:
+
+### Bigram Analysis:
+
+```{r}
+news_bigrams<-tokens_ngrams(news_tokens,n=2)
+bigram_dfm<-dfm(news_bigrams)
+top_bigrams<-topfeatures(bigram_dfm,28)
+```
+
+### Visualize the bigrams
+
+```{r}
+bigram_df<-data.frame(
+  Bigram=names(top_bigrams),
+  Frequency=as.numeric(top_bigrams)
+)
+
+ggplot(bigram_df,aes(x=reorder(Bigram,Frequency),y=Frequency))+
+  geom_col(fill="darkgreen")+
+  coord_flip()+
+  labs(title = "Top 20 Bigrams",
+       x="Bigrams",y="Frequency")+theme_minimal()
+```
+
+### Trigram Analysis:
+
+```{r}
+news_trigrams<-tokens_ngrams(news_tokens,n=3)
+trigram_dfm<-dfm(news_trigrams)
+top_trigrams<-topfeatures(trigram_dfm,20)
+```
+
+### Visualize the trigrams
+
+```{r}
+trigram_df <- data.frame(
+  Trigram = names(top_trigrams),
+  Frequency = as.numeric(top_trigrams)
+)
+
+ggplot(trigram_df, aes(x = reorder(Trigram, Frequency), y = Frequency)) +
+  geom_col(fill = "purple") +
+  coord_flip() +
+  labs(
+    title = "Top 20 Trigrams",
+    x = "Trigrams",
+    y = "Frequency"
+  ) +
+  theme_minimal()
+```
+
+## Lexical Diversity Analysis
+
+### Calculate lexical diversity (Type-Token Ratio)
+
+```{r}
+calculate_lexical_diversity <- function(tokens) {
+types <- length(unique(unlist(tokens)))
+tokens_total <- length(unlist(tokens))
+return(types / tokens_total)
+}
+```
+
+### Lexical diversity by category
+
+```{r}
+lexical_diversity <- news_data %>%
+group_by(category) %>%
+summarise(
+avg_lexical_diversity = mean(sapply(strsplit(content, "\\s+"), 
+function(x) length(unique(x)) / length(x))),.groups = "drop")
+
+print(lexical_diversity)
+```
+
+### Visualize lexical diversity
+
+```{r}
+ggplot(lexical_diversity, aes(x = reorder(category, avg_lexical_diversity), 
+y = avg_lexical_diversity)) +geom_col(fill = "purple", 
+alpha = 0.7) +coord_flip() +
+labs(title = "Average Lexical Diversity by Category",
+x = "Category", y = "Lexical Diversity (TTR)") +
+theme_minimal()
+```
+
+# News Category Classification
+
+```{r}
+set.seed(123)
+
+stratified_indices <- createDataPartition(news_data$category, 
+                                         p = 0.4,  # 40% of 50K = 20K
+                                         list = FALSE)
+
+news_data_20k <- news_data[stratified_indices, ]
+
+```
+
+```{r}
+cat("Original dataset:", nrow(news_data), "articles\n")
+cat("Stratified subset:", nrow(news_data_20k), "articles\n")
+```
+
+```{r}
+original_proportions <- prop.table(table(news_data$category))
+subset_proportions <- prop.table(table(news_data_20k$category))
+
+comparison_df <- data.frame(
+  Category = names(original_proportions),
+  Original_Proportion = round(as.numeric(original_proportions), 3),
+  Subset_Proportion = round(as.numeric(subset_proportions[names(original_proportions)]), 3)
+)
+print(comparison_df)
+```
+
+```{r}
+write_csv(news_data_20k, "news_data_20k_stratified.csv")
+```
+
+```{r}
+set.seed(123)
+
+trainIndex <- createDataPartition(news_data_20k$category, p = 0.8, list = FALSE)
+train_data <- news_data_20k[trainIndex, ] 
+test_data <- news_data_20k[-trainIndex, ]  
+```
+
+```{r}
+train_corpus <- corpus(train_data, text_field = "content")
+test_corpus <- corpus(test_data, text_field = "content")
+
+train_tokens <- tokens(train_corpus, remove_punct = TRUE, remove_symbols = TRUE, remove_numbers = TRUE)
+test_tokens <- tokens(test_corpus, remove_punct = TRUE, remove_symbols = TRUE, remove_numbers = TRUE)
+```
+
+```{r}
+train_dfm <- dfm(train_tokens)
+test_dfm <- dfm(test_tokens)
+
+train_dfm <- dfm_trim(train_dfm, min_docfreq = 0.01, docfreq_type = "prop")
+test_dfm <- dfm_match(test_dfm, features = featnames(train_dfm))
+```
+
+```{r}
+train_tfidf <- dfm_tfidf(train_dfm)
+test_tfidf <- dfm_tfidf(test_dfm)
+```
+
+```{r}
+cat("Training DFM dimensions:", dim(train_dfm), "\n")
+cat("Test DFM dimensions:", dim(test_dfm), "\n")
+```
+
+```{r}
+train_sparse <- as(train_tfidf, "dgCMatrix")
+test_sparse <- as(test_tfidf, "dgCMatrix")
+```
+
+# Model Training and Evaluation
+
+## Naive Bayes Classifier
+
+```{r}
+cat("Training Naive Bayes model...\n")
+nb_model <- textmodel_nb(train_tfidf, train_data$category, smooth = 1)
+nb_predictions <- predict(nb_model, newdata = test_tfidf)
+nb_confusion <- confusionMatrix(nb_predictions, as.factor(test_data$category))
+
+cat("=== NAIVE BAYES RESULTS ===\n")
+print(nb_confusion)
+```
+
+## Support Vector Machine
+
+```{r}
+cat("Training SVM model...\n")
+# Convert to sparse format for e1071
+train_sparse <- as(train_tfidf, "dgCMatrix")
+test_sparse <- as(test_tfidf, "dgCMatrix")
+
+train_data$category <- as.factor(sQ
+```
+
+## Random Forest
+
+```{r}
+
+cat("Training Random Forest model using ranger...\n")
+
+train_features <- convert(train_tfidf, to = "data.frame")
+test_features <- convert(test_tfidf, to = "data.frame")
+
+colnames(train_features) <- make.names(colnames(train_features), unique = TRUE)
+colnames(test_features) <- make.names(colnames(test_features), unique = TRUE)
+
+train_features$category <- as.factor(train_data$category)
+test_features$category <- as.factor(test_data$category)
+
+rm(train_tfidf, test_tfidf)
+gc()
+```
+
+```{r}
+rf_model <- ranger(category ~ ., 
+                  data = train_features,
+                  num.trees = 50,
+                  num.threads = parallel::detectCores() - 1,
+                  verbose = TRUE,
+                  seed = 123)
+
+rf_predictions <- predict(rf_model, test_features)$predictions
+
+rf_confusion <- confusionMatrix(rf_predictions, test_features$category)
+
+cat("\n=== RANDOM FOREST RESULTS (Ranger Package) ===\n")
+print(rf_confusion)
+
+rm(train_features, test_features)
+gc()
+```
+
+## Model Comparison and Performance Visualization
+
+```{r}
+model_comparison <- data.frame(
+  Model = c("Naive Bayes", "SVM", "Random Forest"),
+  Accuracy = c(
+    round(nb_confusion$overall['Accuracy'], 4),
+    round(svm_confusion$overall['Accuracy'], 4),
+    round(rf_confusion$overall['Accuracy'], 4)
+  ),
+  Precision = c(
+    round(mean(nb_confusion$byClass[,'Precision'], na.rm = TRUE), 4),
+    round(mean(svm_confusion$byClass[,'Precision'], na.rm = TRUE), 4),
+    round(mean(rf_confusion$byClass[,'Precision'], na.rm = TRUE), 4)
+  ),
+  Recall = c(
+    round(mean(nb_confusion$byClass[,'Recall'], na.rm = TRUE), 4),
+    round(mean(svm_confusion$byClass[,'Recall'], na.rm = TRUE), 4),
+    round(mean(rf_confusion$byClass[,'Recall'], na.rm = TRUE), 4)
+  ),
+  F1_Score = c(
+    round(mean(nb_confusion$byClass[,'F1'], na.rm = TRUE), 4),
+    round(mean(svm_confusion$byClass[,'F1'], na.rm = TRUE), 4),
+    round(mean(rf_confusion$byClass[,'F1'], na.rm = TRUE), 4)
+  ),
+  Kappa = c(
+    round(nb_confusion$overall['Kappa'], 4),
+    round(svm_confusion$overall['Kappa'], 4),
+    round(rf_confusion$overall['Kappa'], 4)
+  )
+)
+
+print(model_comparison)
+
+best_model_idx <- which.max(model_comparison$Accuracy)
+best_model <- model_comparison$Model[best_model_idx]
+best_accuracy <- model_comparison$Accuracy[best_model_idx]
+
+
+```
+
+```{r}
+
+comparison_melted <- melt(model_comparison[, c("Model", "Accuracy", "Precision", "Recall", "F1_Score")], 
+                         id.vars = "Model")
+
+performance_plot <- ggplot(comparison_melted, aes(x = Model, y = value, fill = variable)) +
+  geom_bar(stat = "identity", position = "dodge", alpha = 0.8) +
+  labs(
+    title = "Model Performance Comparison",
+    subtitle = "Nepali News Category Classification (20K Dataset)",
+    y = "Score",
+    x = "Model",
+    fill = "Metric"
+  ) +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Set2") +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5, size = 12),
+    axis.text.x = element_text(angle = 0, hjust = 0.5),
+    legend.position = "bottom"
+  ) +
+  ylim(0, 1) +
+  geom_text(aes(label = round(value, 3)), 
+            position = position_dodge(width = 0.9), 
+            vjust = -0.5, size = 3)
+
+print(performance_plot)
+```
+
+```{r}
+accuracy_plot <- ggplot(model_comparison, aes(x = reorder(Model, Accuracy), y = Accuracy)) +
+  geom_col(fill = c("lightblue", "lightgreen", "orange"), alpha = 0.8) +
+  geom_text(aes(label = paste0(round(Accuracy * 100, 2), "%")), 
+            vjust = -0.5, size = 4, fontface = "bold") +
+  labs(
+    title = "Model Accuracy Comparison",
+    subtitle = "Nepali News Classification Performance",
+    x = "Model",
+    y = "Accuracy"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5, size = 12)
+  ) +
+  ylim(0, 1)
+
+print(accuracy_plot)
+```
+
+```{r}
+if (best_model == "Naive Bayes") {
+  best_confusion <- nb_confusion
+} else if (best_model == "SVM") {
+  best_confusion <- svm_confusion
+} else {
+  best_confusion <- rf_confusion
+}
+
+cm_data <- as.data.frame(best_confusion$table)
+
+cm_plot <- ggplot(cm_data, aes(x = Prediction, y = Reference, fill = Freq)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient(low = "white", high = "steelblue") +
+  geom_text(aes(label = Freq), vjust = 0.5) +
+  theme_minimal() +
+  labs(
+    title = paste("Confusion Matrix:", best_model),
+    subtitle = "Nepali News Classification Results",
+    x = "Predicted Category",
+    y = "Actual Category",
+    fill = "Count"
+  ) +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5, size = 12),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.text.y = element_text(angle = 0)
+  )
+
+print(cm_plot)
+
+```
+
+```{r}
+if (!dir.exists("models")) {
+  dir.create("models", recursive = TRUE)
+}
+
+if (!dir.exists("outputs")) {
+  dir.create("outputs", recursive = TRUE)
+}
+
+saveRDS(nb_model, "models/naive_bayes_20k.rds")
+saveRDS(svm_model, "models/svm_20k.rds")
+saveRDS(rf_model, "models/random_forest_20k.rds")
+
+predictions_df <- data.frame(
+  actual_category = test_data$category,
+  nb_prediction = nb_predictions,
+  svm_prediction = svm_predictions,
+  rf_prediction = rf_predictions
+)
+
+ggsave("outputs/model_performance_comparison.png", performance_plot, width = 12, height = 8)
+ggsave("outputs/accuracy_comparison.png", accuracy_plot, width = 10, height = 6)
+ggsave("outputs/confusion_matrix_best_model.png", cm_plot, width = 10, height = 8)
+
+if (exists("top_features_plot")) {
+  ggsave("outputs/feature_importance_rf.png", top_features_plot, width = 10, height = 8)
+}
+
+cat("All models, results, and visualizations saved successfully!\n")
+
+```
+
+```{r}
+classification_summary <- list(
+  dataset_info = list(
+    original_size = nrow(news_data),
+    subset_size = nrow(news_data_20k),
+    train_size = nrow(train_data),
+    test_size = nrow(test_data),
+    sampling_method = "stratified"
+  ),
+  model_performance = model_comparison,
+  best_model = list(
+    name = best_model,
+    accuracy = best_accuracy,
+    confusion_matrix = best_confusion$table
+  ),
+  feature_info = list(
+    total_features = ncol(train_dfm),
+    feature_reduction = "TF-IDF weighted, min_docfreq = 0.01"
+  ),
+  processing_info = list(
+    date_processed = Sys.Date(),
+    r_version = R.version.string,
+    seed_used = 123
+  )
+)
+
+saveRDS(classification_summary, "outputs/classification_summary_20k.rds")
+
+cat("=== FINAL CLASSIFICATION SUMMARY ===\n")
+cat("Dataset: 20K stratified sample from 50K Nepali news articles\n")
+cat("Best Model:", best_model, "with", round(best_accuracy * 100, 2), "% accuracy\n")
+cat("Total Features:", ncol(train_dfm), "\n")
+cat("Categories:", length(unique(news_data_20k$category)), "\n")
+cat("Processing completed successfully!\n")
+
+```
+
+# Sentiment Analysis
+
+```{r}
+data <- read_csv("nepali_sentiment_lexicon.csv")
+```
+
+```{r}
+data$clean_text <- data$Sentences %>%
+  tolower() %>%
+  replace_non_ascii() %>%
+  replace_contraction() %>%
+  replace_number() %>%
+  # replace_punctuation() %>%
+  str_squish()
+
+set.seed(123)
+split <- createDataPartition(data$Sentiment, p = 0.8, list = FALSE)
+train <- data[split, ]
+test <- data[-split, ]
+```
+
+```{r}
+it_train <- itoken(train$clean_text)
+vocab <- create_vocabulary(it_train)
+vectorizer <- vocab_vectorizer(vocab)
+dtm_train <- create_dtm(it_train, vectorizer)
+
+it_test <- itoken(test$clean_text)
+dtm_test <- create_dtm(it_test, vectorizer)
+```
+
+```{r}
+model <- cv.glmnet(x = dtm_train, y = train$Sentiment, family = "multinomial", type.measure = "class")
+```
+
+```{r}
+pred <- predict(model, dtm_test, s = "lambda.min", type = "class")
+confusionMatrix(as.factor(pred), as.factor(test$Sentiment))
+```
+
+```{r}
+predict_sentiment <- function(text, model, vectorizer_obj) {
+  # Clean the text using the same process as training
+  clean_text <- text %>%
+    tolower() %>%
+    replace_non_ascii() %>%
+    replace_contraction() %>%
+    replace_number() %>%
+    gsub("[[:punct:]]+", " ", .) %>%  # Remove punctuation
+    str_squish()
+  
+  it_new <- itoken(clean_text)
+  dtm_new <- create_dtm(it_new, vectorizer_obj)
+  
+  predictions <- predict(model, dtm_new, s = "lambda.min", type = "class")
+  probabilities <- predict(model, dtm_new, s = "lambda.min", type = "response")
+  
+  confidence <- apply(probabilities, 1, max)
+  
+  return(data.frame(
+    text = text,
+    predicted_sentiment = as.character(predictions),
+    confidence = round(confidence, 3)
+  ))
+}
+
+```
+
+```{r}
+example_headlines <- c(
+  "सरकारको यो निर्णय राम्रो देखिन्छ र जनताका लागि फाइदाजनक छ",
+  "भ्रष्टाचार बढ्दै गएको छ र यसले देशलाई नोक्सान पुर्याइरहेको छ",
+  "नेपालको अर्थतन्त्र बिस्तारै सुधार हुँदै गएको छ",
+  "आजको मौसम सफा छ र हावा राम्रो छ",
+  "यो निर्णय गलत छ र जनताले पीडा भोग्नुपर्नेछ"
+)
+
+# Analyze sentiment of example headlines
+example_results <- predict_sentiment(example_headlines, model, vectorizer)
+
+cat("=== EXAMPLE HEADLINE SENTIMENT ANALYSIS ===\n")
+print(example_results)
+
+# Display results in readable format
+for(i in 1:nrow(example_results)) {
+  cat("\nHeadline:", example_results$text[i])
+  cat("\nSentiment:", example_results$predicted_sentiment[i])
+  cat("\nConfidence:", example_results$confidence[i])
+  cat("\n", rep("-", 60), "\n")
+}
+
+```
+
+```{r}
+news_data <- read_csv("50k_news_dataset.csv", show_col_types = FALSE)
+
+set.seed(123)
+sample_size <- 10000
+sample_indices <- sample(1:nrow(news_data), sample_size)
+news_sample <- news_data[sample_indices, ]
+
+
+headline_sentiment_results <- predict_sentiment(news_sample$heading, model, vectorizer)
+
+news_sample$predicted_sentiment <- headline_sentiment_results$predicted_sentiment
+news_sample$sentiment_confidence <- headline_sentiment_results$confidence
+
+```
+
+```{r}
+sentiment_summary <- table(news_sample$predicted_sentiment)
+cat("\nSentiment Distribution:\n")
+print(sentiment_summary)
+
+sentiment_percentages <- round(prop.table(sentiment_summary) * 100, 2)
+print(sentiment_percentages)
+```
+
+```{r}
+sample_display <- news_sample[1:10, c("category", "predicted_sentiment", "sentiment_confidence")]
+print(sample_display)
+```
+
+```{r}
+p1 <- ggplot(news_sample, aes(x = predicted_sentiment)) +
+  geom_bar(fill = "steelblue", alpha = 0.7) +
+  labs(title = "Sentiment Distribution in News Headlines",
+       subtitle = paste("ML Analysis of", sample_size, "headlines"),
+       x = "Sentiment", y = "Count") +
+  theme_minimal() +
+  geom_text(stat = 'count', aes(label = after_stat(count)), vjust = -0.5)
+
+print(p1)
+
+```
+
+```{r}
+p3 <- ggplot(news_sample, aes(x = sentiment_confidence)) +
+  geom_histogram(bins = 20, fill = "steelblue", alpha = 0.7) +
+  labs(title = "Model Confidence Distribution",
+       x = "Confidence Score", y = "Frequency") +
+  theme_minimal() +
+  geom_vline(xintercept = mean(news_sample$sentiment_confidence), 
+             color = "red", linetype = "dashed")
+
+print(p3)
+
+```
+
+## Text Summarization with TextRank
+
+```{r}
+summarize_with_textrank <- function(text, n_sentences = 3) {
+  # Preprocess text for TextRank
+  sentences <- unlist(strsplit(text, "\\.|\\!|\\?"))
+  sentences <- trimws(sentences)
+  sentences <- sentences[sentences != ""]
+  
+  if (length(sentences) <= n_sentences) {
+    return(paste(sentences, collapse = " "))
+  }
+  
+  sentences_df <- data.frame(
+    sentence_id = 1:length(sentences),
+    sentence = sentences,
+    stringsAsFactors = FALSE
+  )
+  
+  terminology <- data.frame()
+  for (i in 1:length(sentences)) {
+    words <- unlist(strsplit(sentences[i], "\\s+"))
+    words <- words[nchar(words) > 2]  # Filter short words
+    if (length(words) > 0) {
+      terminology <- rbind(terminology, 
+                          data.frame(sentence_id = i, 
+                                   word = words, 
+                                   stringsAsFactors = FALSE))
+    }
+  }
+  
+  if (nrow(terminology) == 0) {
+    return(paste(sentences[1:min(n_sentences, length(sentences))], collapse = " "))
+  }
+  
+  tr <- textrank_sentences(data = sentences_df, 
+                          terminology = terminology)
+  
+  top_sentences <- summary(tr, n = n_sentences, keep.sentence.order = TRUE)
+  
+  return(paste(top_sentences, collapse = " "))
+}
+
+sample_indices <- sample(1:nrow(news_data), min(100, nrow(news_data)))
+news_data$summary <- NA
+
+for (i in sample_indices) {
+  tryCatch({
+    news_data$summary[i] <- summarize_with_textrank(news_data$content[i], 3)
+  }, error = function(e) {
+    news_data$summary[i] <- substr(news_data$content[i], 1, 200)
+  })
+}
+
+for (i in 1:3) {
+  cat("Original:", substr(news_data$content[sample_indices[i]], 1, 300), "...\n\n")
+  cat("Summary:", news_data$summary[sample_indices[i]], "\n\n")
+  cat("---\n\n")
+}
+
+```
+
+## Named Entity Recognition
+
+```{r}
+
+model_download <- udpipe_download_model(language = "hindi", model_dir = "models/")
+
+print(model_download)
+```
+
+```{r}
+model_path <- model_download$file_model
+print(paste("Model path:", model_path))
+print(paste("File exists:", file.exists(model_path)))
+
+list.files("models/", full.names = TRUE)
+```
+
+```{r}
+
+model_info <- udpipe_download_model(language = "hindi")
+print("Model download info:")
+print(model_info)
+
+hindi_model <- udpipe_load_model(model_info$file_model)
+cat("Hindi model loaded successfully for Nepali text processing!\n")
+
+extract_named_entities <- function(text, model) {
+
+  result <- udpipe_annotate(model, x = text)
+  result_df <- as.data.frame(result)
+  
+  entities <- result_df[result_df$upos == "PROPN", "token"]
+  
+  return(unique(entities[entities != ""]))
+}
+
+sample_size <- 300
+sample_articles <- sample(1:nrow(news_data_20k), sample_size)
+
+cat("Extracting named entities from", sample_size, "articles...\n")
+
+all_entities <- c()
+
+for(i in sample_articles) {
+  entities <- extract_named_entities(news_data_20k$content[i], hindi_model)
+  all_entities <- c(all_entities, entities)
+  
+  if(length(all_entities) %% 50 == 0) {
+    cat("Processed articles, found", length(all_entities), "entities so far...\n")
+  }
+}
+
+entity_counts <- table(all_entities)
+top_entities <- sort(entity_counts, decreasing = TRUE)[1:30]
+
+cat("\n=== TOP 30 NAMED ENTITIES ===\n")
+print(top_entities)
+
+```
+
+```{r}
+entity_df <- data.frame(
+  Entity = names(top_entities),
+  Count = as.numeric(top_entities)
+)
+
+ggplot(head(entity_df, 20), aes(x = reorder(Entity, Count), y = Count)) +
+  geom_col(fill = "orange", alpha = 0.8) +
+  coord_flip() +
+  labs(
+    title = "Top 20 Named Entities in Nepali News",
+    subtitle = "Extracted using Hindi UDPipe Model",
+    x = "Named Entity",
+    y = "Frequency"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5, size = 12)
+  )
+
+```
+
+```{r}
+category_entities <- list()
+
+for(category in unique(news_data_20k$category)) {
+
+    cat_articles <- which(news_data_20k$category == category)
+  cat_sample <- intersect(sample_articles, cat_articles)
+  
+  if(length(cat_sample) > 0) {
+    cat_entities <- c()
+    for(i in cat_sample) {
+      entities <- extract_named_entities(news_data_20k$content[i], hindi_model)
+      cat_entities <- c(cat_entities, entities)
+    }
+    
+    if(length(cat_entities) > 0) {
+      cat_freq <- table(cat_entities)
+      top_cat_entities <- head(sort(cat_freq, decreasing = TRUE), 5)
+      category_entities[[category]] <- top_cat_entities
+    }
+  }
+}
+
+cat("\n=== TOP ENTITIES BY CATEGORY ===\n")
+for(category in names(category_entities)) {
+  if(length(category_entities[[category]]) > 0) {
+    cat("\n", toupper(category), ":\n")
+    print(category_entities[[category]])
+  }
+}
+
+```
